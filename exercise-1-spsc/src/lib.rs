@@ -6,10 +6,10 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
-const BUFFER_SIZE: usize = 512;
+const BUFFER_SIZE: usize = 4096;
 
 pub struct Producer<T: Send> {
-    message_buffer: Arc<Box<[UnsafeCell<T>; 512]>>,
+    message_buffer: Arc<Box<[UnsafeCell<T>; BUFFER_SIZE]>>,
     read_index: Arc<AtomicUsize>,
     write_index: Arc<AtomicUsize>,
     producer_counter: Arc<AtomicUsize>,
@@ -17,7 +17,7 @@ pub struct Producer<T: Send> {
     _marker: PhantomData<T>,
 }
 pub struct Consumer<T: Send> {
-    message_buffer: Arc<Box<[UnsafeCell<T>; 512]>>,
+    message_buffer: Arc<Box<[UnsafeCell<T>; BUFFER_SIZE]>>,
     read_index: Arc<AtomicUsize>,
     write_index: Arc<AtomicUsize>,
     producer_counter: Arc<AtomicUsize>,
@@ -40,7 +40,7 @@ impl<T: Send> SPSC<T> {
     pub fn new() -> Self {
         // let array: [UnsafeCell<Option<T>>; BUFFER_SIZE] = unsafe { std::mem::zeroed() };
         let cell_array: Box<[UnsafeCell<T>; BUFFER_SIZE]> = Box::new(unsafe { std::mem::zeroed() });
-        let message_buffer: Arc<Box<[UnsafeCell<T>; 512]>> = Arc::new(cell_array);
+        let message_buffer: Arc<Box<[UnsafeCell<T>; BUFFER_SIZE]>> = Arc::new(cell_array);
         let read_index: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
         let write_index: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
         let producer_counter: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(1));
