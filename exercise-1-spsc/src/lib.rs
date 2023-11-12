@@ -38,7 +38,6 @@ pub struct RecvError;
 
 impl<T: Send> SPSC<T> {
     pub fn new() -> Self {
-        // let array: [UnsafeCell<Option<T>>; BUFFER_SIZE] = unsafe { std::mem::zeroed() };
         let cell_array: Box<[UnsafeCell<T>; BUFFER_SIZE]> = Box::new(unsafe { std::mem::zeroed() });
         let message_buffer: Arc<Box<[UnsafeCell<T>; BUFFER_SIZE]>> = Arc::new(cell_array);
         let read_index: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
@@ -75,13 +74,11 @@ impl<T: Send> Producer<T> {
         }
 
         loop {
-            let write_index: usize = self.write_index.load(Ordering::SeqCst); // % BUFFER_SIZE;
-            let read_index: usize = self.read_index.load(Ordering::SeqCst); // % BUFFER_SIZE;
+            let write_index: usize = self.write_index.load(Ordering::SeqCst);
+            let read_index: usize = self.read_index.load(Ordering::SeqCst);
 
             // The write index should not 'overtake' the read index
             // when wrapping around the buffer
-
-            // if ((write_index + 1) % BUFFER_SIZE) != read_index {
             if write_index < read_index + BUFFER_SIZE {
                 unsafe {
                     self.message_buffer[write_index % BUFFER_SIZE]
@@ -101,8 +98,8 @@ impl<T: Send> Consumer<T> {
     pub fn recv(&self) -> Result<T, RecvError> {
         loop {
             let producer_counter: usize = self.producer_counter.load(Ordering::SeqCst);
-            let write_index: usize = self.write_index.load(Ordering::SeqCst); // % BUFFER_SIZE;
-            let read_index: usize = self.read_index.load(Ordering::SeqCst); // % BUFFER_SIZE;
+            let write_index: usize = self.write_index.load(Ordering::SeqCst);
+            let read_index: usize = self.read_index.load(Ordering::SeqCst);
 
             // When no producer is active, the consumer read all we are done
             if producer_counter == 0 && read_index == write_index {
