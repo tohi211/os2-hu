@@ -10,7 +10,7 @@ use std::sync::Arc;
 const BUFFER_SIZE: usize = 4096;
 
 pub struct Producer<T: Send> {
-    message_buffer: Arc<[UnsafeCell<T>; BUFFER_SIZE]>,
+    message_buffer: Arc<[UnsafeCell<Option<T>>; BUFFER_SIZE]>,
     read_index: Arc<AtomicUsize>,
     write_index: Arc<AtomicUsize>,
     producer_counter: Arc<AtomicUsize>,
@@ -18,7 +18,7 @@ pub struct Producer<T: Send> {
     _marker: PhantomData<T>,
 }
 pub struct Consumer<T: Send> {
-    message_buffer: Arc<[UnsafeCell<T>; BUFFER_SIZE]>,
+    message_buffer: Arc<[UnsafeCell<Option<T>>; BUFFER_SIZE]>,
     read_index: Arc<AtomicUsize>,
     write_index: Arc<AtomicUsize>,
     producer_counter: Arc<AtomicUsize>,
@@ -38,12 +38,12 @@ pub struct SendError<T>(pub T);
 pub struct RecvError;
 
 impl<T: Send> SPSC<T> {
+    const INIT: UnsafeCell<Option<T>> = UnsafeCell::new(None);
     pub fn new() -> Self {
         // The only way I found for 2 threads to share a buffer is unsafe cells
-        let cell_array: [UnsafeCell<T>; BUFFER_SIZE] =
-            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        let cell_array: [UnsafeCell<Option<T>>; BUFFER_SIZE] = [Self::INIT; BUFFER_SIZE];
 
-        let message_buffer: Arc<[UnsafeCell<T>; BUFFER_SIZE]> = Arc::new(cell_array);
+        let message_buffer: Arc<[UnsafeCell<Option<T>>; BUFFER_SIZE]> = Arc::new(cell_array);
 
         let read_index: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
         let write_index: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
@@ -98,7 +98,7 @@ impl<T: Send> Producer<T> {
                 unsafe {
                     self.message_buffer[write_index % BUFFER_SIZE]
                         .get()
-                        .write(val);
+                        .write(Some(val));
                 }
 
                 self.write_index.fetch_add(1, Ordering::SeqCst);
@@ -128,10 +128,13 @@ impl<T: Send> Consumer<T> {
             // producer ensures, that the write index never overtakes the read index
             // when wrapping around the buffer
             if read_index < write_index {
-                let val = self.message_buffer[read_index % BUFFER_SIZE].get();
-                self.read_index.fetch_add(1, Ordering::SeqCst);
-
-                unsafe { return Result::Ok(val.read()) }
+                unsafe {
+                    let val = self.message_buffer[read_index % BUFFER_SIZE]
+                        .get()
+                        .replace(None);
+                    self.read_index.fetch_add(1, Ordering::SeqCst);
+                    return Ok(val.unwrap());
+                }
             }
         }
     }
@@ -207,36 +210,36 @@ mod tests {
     // range of elements to be moved across the channel during testing
     const ELEMS: std::ops::Range<i32> = 0..1000;
 
-    // #[test]
-    // fn unused_elements_are_dropped() {
-    //     lazy_static::initialize(&FOO_SET);
+    #[test]
+    fn unused_elements_are_dropped() {
+        lazy_static::initialize(&FOO_SET);
 
-    //     for i in 0..100 {
-    //         println!("Thread {} ", i);
-    //         let (px, cx) = channel();
-    //         let handle = thread::spawn(move || {
-    //             for i in 0.. {
-    //                 if px.send(Foo::new(i)).is_err() {
-    //                     println!("AHHHHH on i: {}", i);
-    //                     return;
-    //                 }
-    //             }
-    //         });
+        for i in 0..100 {
+            println!("Thread {} ", i);
+            let (px, cx) = channel();
+            let handle = thread::spawn(move || {
+                for i in 0.. {
+                    if px.send(Foo::new(i)).is_err() {
+                        println!("AHHHHH on i: {}", i);
+                        return;
+                    }
+                }
+            });
 
-    //         for _ in 0..i {
-    //             cx.recv().unwrap();
-    //         }
+            for _ in 0..i {
+                cx.recv().unwrap();
+            }
 
-    //         drop(cx);
+            drop(cx);
 
-    //         assert!(handle.join().is_ok());
+            assert!(handle.join().is_ok());
 
-    //         let map = FOO_SET.lock().unwrap();
-    //         if !map.is_empty() {
-    //             panic!("FOO_MAP not empty: {:?}", *map);
-    //         }
-    //     }
-    // }
+            let map = FOO_SET.lock().unwrap();
+            if !map.is_empty() {
+                panic!("FOO_MAP not empty: {:?}", *map);
+            }
+        }
+    }
 
     #[test]
     fn elements_arrive_ordered() {
