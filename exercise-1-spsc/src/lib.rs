@@ -2,7 +2,7 @@
 
 use std::cell::UnsafeCell;
 use std::marker::PhantomData;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
@@ -15,6 +15,7 @@ pub struct Producer<T: Send> {
     write_index: Arc<AtomicUsize>,
     producer_counter: Arc<AtomicUsize>,
     consumer_counter: Arc<AtomicUsize>,
+    synchronizer: Arc<AtomicBool>,
     _marker: PhantomData<T>,
 }
 pub struct Consumer<T: Send> {
@@ -23,6 +24,7 @@ pub struct Consumer<T: Send> {
     write_index: Arc<AtomicUsize>,
     producer_counter: Arc<AtomicUsize>,
     consumer_counter: Arc<AtomicUsize>,
+    synchronizer: Arc<AtomicBool>,
     _marker: PhantomData<T>,
 }
 
@@ -50,12 +52,15 @@ impl<T: Send> SPSC<T> {
         let producer_counter: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(1));
         let consumer_counter: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(1));
 
+        let synchronizer = Arc::new(AtomicBool::new(false));
+
         let producer = Producer {
             message_buffer: message_buffer.clone(),
             read_index: read_index.clone(),
             write_index: write_index.clone(),
             producer_counter: producer_counter.clone(),
             consumer_counter: consumer_counter.clone(),
+            synchronizer: synchronizer.clone(),
             _marker: PhantomData,
         };
 
@@ -65,6 +70,7 @@ impl<T: Send> SPSC<T> {
             write_index: write_index.clone(),
             producer_counter: producer_counter.clone(),
             consumer_counter: consumer_counter.clone(),
+            synchronizer: synchronizer.clone(),
             _marker: PhantomData,
         };
 
@@ -79,6 +85,7 @@ impl<T: Send> Producer<T> {
         }
 
         loop {
+            while(self.synchronizer.swap(true, Ordering::SeqCst)){}
             let write_index: usize = self.write_index.load(Ordering::SeqCst);
             let read_index: usize = self.read_index.load(Ordering::SeqCst);
 
@@ -103,8 +110,10 @@ impl<T: Send> Producer<T> {
 
                 self.write_index.fetch_add(1, Ordering::SeqCst);
 
+                self.synchronizer.swap(false, Ordering::SeqCst);
                 return Ok(());
             }
+            self.synchronizer.swap(false, Ordering::SeqCst);
         }
     }
 }
@@ -112,11 +121,13 @@ impl<T: Send> Producer<T> {
 impl<T: Send> Consumer<T> {
     pub fn recv(&self) -> Result<T, RecvError> {
         loop {
+            while(self.synchronizer.swap(true, Ordering::SeqCst)){}
             let write_index: usize = self.write_index.load(Ordering::SeqCst);
             let read_index: usize = self.read_index.load(Ordering::SeqCst);
 
             // When no producer is active and the consumer read all messages, we are done
             if read_index == write_index && self.producer_counter.load(Ordering::SeqCst) == 0 {
+                self.synchronizer.swap(false, Ordering::SeqCst);
                 return Err(RecvError);
             }
 
@@ -133,9 +144,11 @@ impl<T: Send> Consumer<T> {
                         .get()
                         .replace(None);
                     self.read_index.fetch_add(1, Ordering::SeqCst);
+                    self.synchronizer.swap(false, Ordering::SeqCst);
                     return Ok(val.unwrap());
                 }
             }
+            self.synchronizer.swap(false, Ordering::SeqCst);
         }
     }
 }
